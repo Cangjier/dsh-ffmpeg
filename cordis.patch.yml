@@ -1,0 +1,54 @@
+# dsh-ffmpeg bundle patch.
+#
+# 它只贡献一行，且不依赖任何特定 composition：
+#
+#   dsh-ffmpeg  Host 插件：注册 `ffmpeg_*` 工具
+#               （ffmpeg_env / ffmpeg_setup / ffmpeg_probe / ffmpeg_convert /
+#                 ffmpeg_record / ffmpeg_semantics / ffmpeg_run / ffmpeg_guide）。
+#               需要 `tools` 服务，在挂载了 @deepseek-ai/dsh-tools 的任何 profile 里都安全。
+#
+# 配置分三类，没有任何必填项：
+#   - 路径类（ffmpegPath / ffprobePath / 引擎路径）留空即自动推导，换机器不用改
+#   - 行为类（maxConcurrent / 分析阈值）留空即用代码里的默认值
+#   - 集成类（ocr / salient）留空即"装了同级插件就用，没装就退回自带能力"
+
+- insert:
+    - id: dsh-ffmpeg
+      name: 'dsh-ffmpeg'
+      config:
+        # ffmpeg / ffprobe 的显式路径。null = 依次找 DSH_FFMPEG/DSH_FFPROBE 环境变量 →
+        # 本插件 vendor/ffmpeg/bin → 同级插件的 vendor/ffmpeg/bin → PATH
+        ffmpegPath: null
+        ffprobePath: null
+
+        # 相对路径的基准目录。null = 每次调用给的 cwd，没给就用进程工作目录
+        projectRoot: null
+
+        # 同时最多跑几个 ffmpeg 进程。2 是桌面上"两个都还能推进"的上限
+        maxConcurrent: 2
+
+        # 单次编码的默认超时（毫秒）。超时会杀掉进程并删掉半成品
+        defaultTimeoutMs: 600000
+
+        # 分析（ffmpeg_semantics）的默认值。真实的默认值写在 src/core/semantics.mjs，
+        # 这里只是把它们挪到配置里，留空即不覆盖
+        analysis:
+          sceneThreshold: 8
+          minSegmentSec: 1
+          maxSegmentSec: 30
+          fps: 4
+          maxSide: 320
+          maxKeyframes: 120
+          ocrMaxFrames: 60
+
+        # 文字识别
+        ocr:
+          # auto（同级 dsh-ocr 的离线引擎优先，失败退回 Windows 自带）/ sibling / winrt / off
+          provider: auto
+          # ch / cht / en / japan / korean，或直接的 BCP-47 标签
+          language: ch
+          # 显式指定同级 dsh-ocr 的目录。null = 在本插件的上一级、上两级里找 dsh-ocr
+          pluginPath: null
+
+        # 学习式显著性分割（U²-Net）由同级 video-factory 提供。null = 自动查找
+        salientPluginPath: null

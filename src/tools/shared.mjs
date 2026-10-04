@@ -1,0 +1,287 @@
+/**
+ * Building the model-facing `ffmpeg_*` tools from the registry.
+ *
+ * Three rules shape everything here:
+ *
+ * 1. **Every schema is resident on every turn.** So the surface is eight tools with an `action`
+ *    dispatcher rather than thirty flat ones, and every description is generated from
+ *    `registry.mjs` rather than written beside it — a sentence that appears twice is charged twice.
+ * 2. **Documentation coverage is checked at load time.** An action with no registry entry, or a
+ *    registry entry with no handler, fails registration loudly instead of shipping an
+ *    under-documented schema that no one notices.
+ * 3. **A tool executes; it does not decide.** Nothing here judges whether an output is good enough,
+ *    whether a scene boundary is meaningful, or what a recording was about.
+ *
+ * @module dsh-ffmpeg/tools/shared
+ */
+import { lookupTool } from './registry.mjs'
+
+/** Render any tool result as one pretty-printed JSON text block. */
+export const TEXT_OUTPUT = {
+  schema: { type: 'object', additionalProperties: true },
+  render(_args, value) {
+    return [{ type: 'text', text: typeof value?.text === 'string' ? value.text : JSON.stringify(value, null, 2) }]
+  },
+}
+
+/** Shared `cwd` property: every path-taking tool resolves relative paths against it. */
+export const CWD_PROPERTY = {
+  type: 'string',
+  description: 'Working directory that relative paths resolve against. Defaults to the process working directory.',
+}
+
+/** Shared `force` property. */
+export const FORCE_PROPERTY = {
+  type: 'boolean',
+  description: 'Redo the work even when the result already exists. For an install this is the only way out of a half-unpacked vendor directory, which would otherwise look installed and fail on every use.',
+}
+
+/** Shared `timeoutMs` property. */
+export const TIMEOUT_PROPERTY = {
+  type: 'number',
+  description: 'Give up after this many milliseconds and kill the process. A partial output is deleted, so a timeout never leaves a file that looks finished.',
+}
+
+/** Shared `overwriteInput` property. */
+export const OVERWRITE_INPUT_PROPERTY = {
+  type: 'boolean',
+  description:
+    'Allow the output path to be one of the inputs. Off by default and that default is the point: ffmpeg truncates an output before reading it, so an output that is also an input destroys the source.',
+}
+
+/**
+ * The error type for a request this plugin refuses.
+ *
+ * Thrown errors surface as tool failures, so the message has to be actionable: what was refused,
+ * what was expected, and what to do instead.
+ */
+export class FfmpegPluginError extends Error {
+  /**
+   * @param {string} message - the refusal.
+   */
+  constructor(message) {
+    super(message)
+    this.name = 'FfmpegPluginError'
+  }
+}
+
+/**
+ * One decision-grade line for an action, used as the `action` enum description.
+ *
+ * It is built by priority and bounded, because it is paid for on every turn: what the action does,
+ * then what it requires — the thing a first call gets wrong — then the mistake it prevents or when
+ * to reach for it, whichever is shorter. Everything else is one `ffmpeg_guide` call away.
+ *
+ * @param {string} action - the action name.
+ * @param {object} entry - its registry entry.
+ * @returns {string} one line of prose.
+ */
+export function describeAction(action, entry) {
+  const BUDGET = 240
+  let line = `${action} — ${entry.summary}`
+  if (Array.isArray(entry.required) && entry.required.length > 0) line += ` Requires: ${entry.required.join(', ')}.`
+  const optional = [
+    entry.avoid !== undefined && entry.avoid.length <= 110 ? ` Avoid: ${entry.avoid}` : null,
+    entry.use !== undefined ? ` Use: ${entry.use}` : null,
+  ]
+  for (const clause of optional) {
+    if (clause !== null && line.length + clause.length <= BUDGET) line += clause
+  }
+  return line
+}
+
+/**
+ * Build a tool's description from its registry entry.
+ *
+ * @param {string} name - the tool name.
+ * @param {object} entry - its registry entry.
+ * @param {string[]} actions - the declared action list, in dispatch order.
+ * @returns {string} the model-facing description.
+ */
+export function describeTool(name, entry, actions) {
+  return [
+    entry.purpose,
+    `Actions: ${actions.join(', ')}.`,
+    `Needs: ${entry.needs.join(' ')}`,
+    `Next: ${entry.next.join(' ')}`,
+    `Full detail: ffmpeg_guide {action:"tool", tool:"${name}"}.`,
+  ].join('\n')
+}
+
+/**
+ * Build one family tool.
+ *
+ * @param {object} spec - the family definition.
+ * @param {string} spec.name - the tool name, for example `ffmpeg_probe`.
+ * @param {string[]} spec.actions - every legal `action` value, in dispatch order.
+ * @param {object} spec.extraProperties - additional JSON Schema properties.
+ * @param {Record<string, (args: object, context: object) => Promise<object>>} spec.handlers - one implementation per action.
+ * @returns {object} a raw tool definition suitable for `ctx.tools.register`.
+ * @throws {Error} when the registry and this declaration disagree.
+ */
+export function defineFamilyTool(spec) {
+  const actions = [...spec.actions]
+  const entry = lookupTool(spec.name)
+  if (entry === undefined) {
+    throw new Error(`dsh-ffmpeg: no registry entry for tool ${spec.name}; add it to src/tools/registry.mjs`)
+  }
+
+  const documented = Object.keys(entry.actions)
+  for (const action of actions) {
+    if (entry.actions[action] === undefined) {
+      throw new Error(`dsh-ffmpeg: ${spec.name}.${action} is not documented in src/tools/registry.mjs`)
+    }
+    if (typeof spec.handlers[action] !== 'function') {
+      throw new Error(`dsh-ffmpeg: ${spec.name}.${action} is declared but has no handler`)
+    }
+  }
+  for (const action of documented) {
+    if (!actions.includes(action)) {
+      throw new Error(`dsh-ffmpeg: ${spec.name}.${action} is documented in the registry but not declared here`)
+    }
+  }
+
+  return {
+    name: spec.name,
+    description: describeTool(spec.name, entry, actions),
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: actions,
+          description: actions.map((action) => describeAction(action, entry.actions[action])).join('\n'),
+        },
+        ...spec.extraProperties,
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: TEXT_OUTPUT,
+    async execute(args, context) {
+      // Dispatch through the declared list, not the handler table: a handler belonging to a sibling
+      // tool must be unreachable from this one, or the split surface would be cosmetic.
+      const handler = actions.includes(args?.action) ? spec.handlers[args.action] : undefined
+      if (handler === undefined) {
+        throw new FfmpegPluginError(
+          `${spec.name}: unknown action ${JSON.stringify(args?.action)}; expected one of ${actions.join(', ')}`,
+        )
+      }
+      const safeContext = {
+        cwd: typeof context?.cwd === 'string' && context.cwd !== '' ? context.cwd : process.cwd(),
+        ...context,
+      }
+      return handler(args ?? {}, safeContext)
+    },
+  }
+}
+
+/**
+ * Require a string argument.
+ *
+ * @param {object} args - the tool arguments.
+ * @param {string} key - the field name.
+ * @param {string} [where] - the call name, for the message.
+ * @returns {string} the value.
+ * @throws {FfmpegPluginError} when it is missing or not a string.
+ */
+export function requireString(args, key, where = '') {
+  const value = args[key]
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new FfmpegPluginError(`${where}${where === '' ? '' : ' '}需要 ${key}：一个非空字符串。`)
+  }
+  return value
+}
+
+/**
+ * Require a positive number argument.
+ *
+ * @param {object} args - the tool arguments.
+ * @param {string} key - the field name.
+ * @param {string} [where] - the call name.
+ * @returns {number} the value.
+ * @throws {FfmpegPluginError} when it is missing or not positive.
+ */
+export function requirePositiveNumber(args, key, where = '') {
+  const value = Number(args[key])
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new FfmpegPluginError(`${where}${where === '' ? '' : ' '}需要 ${key}：一个正数。`)
+  }
+  return value
+}
+
+/**
+ * Read an optional boolean, rejecting a non-boolean instead of coercing it.
+ *
+ * `"false"` being truthy in JavaScript is exactly the kind of quiet surprise that turns a request
+ * into the opposite of itself, so a wrong type is refused.
+ *
+ * @param {object} args - the tool arguments.
+ * @param {string} key - the field name.
+ * @param {boolean|undefined} fallback - the value used when absent.
+ * @param {string} where - the call name.
+ * @returns {boolean|undefined} the value.
+ * @throws {FfmpegPluginError} when it is present and not a boolean.
+ */
+export function optionalBoolean(args, key, fallback, where) {
+  const value = args[key]
+  if (value === undefined || value === null) return fallback
+  if (typeof value !== 'boolean') throw new FfmpegPluginError(`${where}: "${key}" 必须是布尔值，收到 ${JSON.stringify(value)}。`)
+  return value
+}
+
+/**
+ * Read one of a fixed set of strings.
+ *
+ * @param {object} args - the tool arguments.
+ * @param {string} key - the field name.
+ * @param {string[]} allowed - the legal values.
+ * @param {string} fallback - the value used when absent.
+ * @param {string} where - the call name.
+ * @returns {string} the value.
+ * @throws {FfmpegPluginError} when it is present and not one of the legal values.
+ */
+export function optionalEnum(args, key, allowed, fallback, where) {
+  const value = args[key]
+  if (value === undefined || value === null) return fallback
+  if (typeof value !== 'string' || !allowed.includes(value)) {
+    throw new FfmpegPluginError(`${where}: "${key}" 只能是 ${allowed.join(' / ')}；收到 ${JSON.stringify(value)}。`)
+  }
+  return value
+}
+
+/**
+ * Read an object argument, refusing anything else.
+ *
+ * @param {object} args - the tool arguments.
+ * @param {string} key - the field name.
+ * @param {string} where - the call name.
+ * @returns {object|undefined} the value.
+ * @throws {FfmpegPluginError} when it is present and not an object.
+ */
+export function optionalObject(args, key, where) {
+  const value = args[key]
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new FfmpegPluginError(`${where}: "${key}" 必须是一个对象，收到 ${JSON.stringify(value)}。`)
+  }
+  return value
+}
+
+/**
+ * Read a list of strings.
+ *
+ * @param {object} args - the tool arguments.
+ * @param {string} key - the field name.
+ * @param {string} where - the call name.
+ * @returns {string[]|undefined} the value.
+ * @throws {FfmpegPluginError} when it is present and not an array of strings.
+ */
+export function optionalStringArray(args, key, where) {
+  const value = args[key]
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || entry.trim() === '')) {
+    throw new FfmpegPluginError(`${where}: "${key}" 必须是字符串数组。`)
+  }
+  return value
+}

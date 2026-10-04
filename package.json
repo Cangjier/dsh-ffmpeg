@@ -1,0 +1,36 @@
+{
+  "name": "dsh-ffmpeg",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DSH 插件：把 ffmpeg 变成一套确定的、可验证的工具——编码、裁剪、抽帧、录屏，以及「一次录屏进，视频加语义结构出」。插件只执行与测量，判断与创作归 DSH。",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": "./index.mjs",
+    "./core": "./src/core/index.mjs",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "index.mjs",
+    "src",
+    "cordis.patch.yml",
+    "docs",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "check": "node --check index.mjs"
+  }
+}
