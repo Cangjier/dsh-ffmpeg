@@ -55,3 +55,14 @@ for (const line of raw.slice(0, 40)) console.log(`  ${line}`)
 const safe = toLosslessJson(structure)
 const roundTrip = JSON.parse(JSON.stringify(safe))
 console.log(`\nafter toLosslessJson: lossless = ${JSON.stringify(roundTrip) === JSON.stringify(safe)}`)
+
+// And the same thing through a registered tool, which is the path the harness actually takes.
+const { toolDefinitions } = await import('../src/tools/index.mjs')
+const semantics = toolDefinitions(normalizeConfig({}), { info: () => {}, warn: () => {}, error: () => {} }).find(
+  (definition) => definition.name === 'ffmpeg_semantics',
+)
+const viaTool = await semantics.execute({ action: 'analyze', input, outDir: 'tmp/lossless-scan/tool', text: 'off', maxKeyframes: 3 }, { cwd: process.cwd() })
+const toolRoundTrip = JSON.parse(JSON.stringify(viaTool))
+console.log(`through the tool definition: lossless = ${JSON.stringify(toolRoundTrip) === JSON.stringify(viaTool)}`)
+const remaining = scan(viaTool)
+console.log(`tool result problems: ${remaining.length === 0 ? 'none' : remaining.slice(0, 10).join(' | ')}`)
