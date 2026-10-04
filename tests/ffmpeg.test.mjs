@@ -270,6 +270,11 @@ test('ffmpeg_semantics analyze produces the structure, the stills and the video'
   if (structure.segments.some((segment) => (segment.text?.lineCount ?? 0) > 0)) {
     assert.ok(Array.isArray(structure.structure.keywords))
   }
+
+  // The whole document must survive the JSON boundary the harness puts every tool result across.
+  // A single `undefined` deep in `segments[3].keyframe` is enough to have the call rejected as
+  // "value is not lossless JSON", so this is asserted on the real, fully populated document.
+  assert.deepEqual(JSON.parse(JSON.stringify(structure)), structure, '结构文档不是无损 JSON')
 })
 
 test('ffmpeg_semantics analyze can skip text, keyframes and the delivery video', { skip }, async () => {
@@ -394,6 +399,37 @@ test('analyzing a file in its own directory never aims the delivery at the sourc
   assert.equal(structure.outputs.video.ok, true, structure.outputs.video.problems.join('；'))
   assert.deepEqual(readFileSync(source), before, '源文件必须一个字节都没变')
   assert.equal(structure.notes.some((line) => line.includes('源文件没有被碰')), true)
+})
+
+test('every tool result is lossless JSON', { skip }, async () => {
+  // The harness refuses a result whose JSON round-trip differs. `undefined`, NaN and -0 are the
+  // three ordinary ways that happens, and they are easy to introduce in a structure document with a
+  // hundred fields.
+  const results = {
+    env: await call('ffmpeg_env', { action: 'probe' }),
+    caps: await call('ffmpeg_env', { action: 'caps' }),
+    info: await call('ffmpeg_probe', { action: 'info', target: DEMO }),
+    scenes: await call('ffmpeg_semantics', { action: 'scenes', input: DEMO }),
+    regions: await call('ffmpeg_semantics', { action: 'regions', input: DEMO, at: 1 }),
+    guide: await call('ffmpeg_guide', { action: 'overview' }),
+  }
+  for (const [name, value] of Object.entries(results)) {
+    assert.deepEqual(JSON.parse(JSON.stringify(value)), value, `${name} 的结果不是无损 JSON`)
+  }
+})
+
+test('every segment of a structure carries the same keys', { skip }, async () => {
+  const outDir = workDir('ffmpeg-keys')
+  const structure = await call('ffmpeg_semantics', { action: 'analyze', input: DEMO, outDir, maxKeyframes: 1, text: 'off', segmentation: 'off', output: 'none', contactSheet: false })
+  const keys = Object.keys(structure.segments[0]).sort()
+  for (const segment of structure.segments) {
+    assert.deepEqual(Object.keys(segment).sort(), keys, `第 ${segment.index} 段的字段与第一段不同`)
+  }
+  // A segment that was not enriched says so with null, not by dropping the key.
+  assert.equal(structure.segments[1].keyframe, null)
+  assert.equal(structure.segments[1].salient, null)
+  assert.equal(structure.segments[1].regionGrid, null)
+  assert.equal(structure.outputs.video, null)
 })
 
 test('probe reports the problems a file has before the conversion discovers them', { skip }, async () => {

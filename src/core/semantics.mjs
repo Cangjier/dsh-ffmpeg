@@ -194,9 +194,13 @@ export async function sceneTimeline(request) {
         mode: 'single-frame',
         size,
         fps: options.fps,
+        sourceSize: { width: sourceWidth, height: sourceHeight },
+        sceneThreshold: options.sceneThreshold,
         decodedFrames: 0,
+        decodedSeconds: 0,
         elapsedMs: 0,
         decodeErrors: null,
+        truncated: false,
       },
       segments: [
         {
@@ -379,7 +383,20 @@ export async function analyze(request) {
 
   for (const segment of timeline.segments) {
     const wanted = stills.length < options.maxKeyframes
-    const enriched = { ...segment }
+    // Every enrichment field starts as null and is filled in only when it is actually measured, so
+    // an unenriched segment and an enriched one have exactly the same keys. A dropped key would
+    // mean "this run does not do masks" and "this segment got no mask" look identical.
+    const enriched = {
+      ...segment,
+      keyframe: null,
+      frame: null,
+      regions: null,
+      labelShares: null,
+      regionGrid: null,
+      dominantColors: null,
+      salient: null,
+      text: null,
+    }
 
     if (wanted) {
       stillIndex += 1
@@ -402,9 +419,7 @@ export async function analyze(request) {
 
       const frameSource = still?.path ?? input
       if (options.segmentation === 'off') {
-        enriched.regions = null
-        enriched.labelShares = null
-        enriched.dominantColors = null
+        // Left as the nulls set above.
       } else {
         try {
           const rgb = await loadRgb(frameSource, { at: still === null ? at : null, maxSide: ANALYSIS_MAX_SIDE, config })
@@ -463,10 +478,8 @@ export async function analyze(request) {
         }
       }
     } else {
-      enriched.keyframe = null
-      enriched.regions = null
-      enriched.labelShares = null
-      enriched.text = null
+      // Beyond maxKeyframes: the timeline facts stay, the measured enrichments do not exist and are
+      // already null.
     }
 
     const described = describeSegmentKind({
@@ -568,7 +581,7 @@ export async function analyze(request) {
         config,
         onProgress: progress,
       })
-      if (outputs.video?.fallbackReason !== undefined) notes.push(outputs.video.fallbackReason)
+      if (outputs.video?.fallbackReason != null) notes.push(outputs.video.fallbackReason)
       notes.push(...(outputs.video?.notes ?? []))
     } catch (error) {
       notes.push(`交付视频生成失败：${error instanceof Error ? error.message.split('\n')[0] : String(error)}`)
@@ -661,7 +674,7 @@ export async function deliverVideo(request) {
     facts: verified.facts,
     passes: result.passes,
     elapsedMs: result.elapsedMs,
-    fallbackReason,
+    fallbackReason: fallbackReason ?? null,
     notes: [...notes, ...(result.notes ?? [])],
   }
 }

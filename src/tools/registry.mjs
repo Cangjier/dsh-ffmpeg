@@ -56,7 +56,7 @@ export const TOOL_REGISTRY = {
       devices: {
         summary: '列出 DirectShow 能看到的采集设备名（摄像头 / 麦克风 / 虚拟声卡），名字原样返回。',
         required: [],
-        use: '在 ffmpeg_record {action:"audio"} 之前，device 必须与这里完全一致。',
+        use: '在 ffmpeg_record {action:"microphone"} 之前，device 必须与这里完全一致。',
         avoid: '列设备时 ffmpeg 会故意返回非零退出码并写在 stderr，这里已按正常结果解析。',
         returns: '{available, video:[], audio:[], error, note}',
         cost: '约 200 ms。',

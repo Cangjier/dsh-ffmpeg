@@ -27,7 +27,48 @@ export const TEXT_OUTPUT = {
 /** Shared `cwd` property: every path-taking tool resolves relative paths against it. */
 export const CWD_PROPERTY = {
   type: 'string',
-  description: 'Working directory that relative paths resolve against. Defaults to the process working directory.',
+  description:
+    'Working directory that relative paths resolve against. Left out, it is the harness process\u2019s working directory — for the desktop app that is the profile directory, not your project — so pass an absolute path (or this argument) when it matters. Every result reports the absolute path actually written.',
+}
+
+/**
+ * Make a value survive `JSON.parse(JSON.stringify(value))` unchanged.
+ *
+ * A tool result crosses a JSON boundary, and three ordinary JavaScript values do not survive it:
+ * `undefined` (the key vanishes), `NaN`/`Infinity` (they become `null`), and `-0` (it becomes `0`).
+ * The harness refuses such a result outright — "value is not lossless JSON" — so the conversion
+ * happens once, here, rather than being remembered at every return statement in eight tools.
+ *
+ * An absent measurement becomes `null`, which is the same thing this plugin says everywhere else:
+ * "no value" is reported as `null`, never as a zero and never by dropping the key.
+ *
+ * @param {*} value - any handler result.
+ * @returns {*} the same data with every JSON-hostile leaf replaced.
+ */
+export function toLosslessJson(value) {
+  if (value === undefined) return null
+  if (value === null) return null
+  const type = typeof value
+  if (type === 'number') {
+    if (!Number.isFinite(value)) return null
+    return Object.is(value, -0) ? 0 : value
+  }
+  if (type === 'string' || type === 'boolean') return value
+  if (type === 'bigint') return value.toString()
+  if (type === 'function' || type === 'symbol') return null
+  if (Array.isArray(value)) return value.map((entry) => toLosslessJson(entry))
+  if (value instanceof Date) return value.toISOString()
+  if (type === 'object') {
+    // Only plain-ish objects are walked. Anything else (a typed array, a Map, a class instance) is
+    // passed through untouched, so a handler that returns one fails loudly instead of having its
+    // shape quietly rewritten into something that no longer means what it said.
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return value
+    const out = {}
+    for (const [key, entry] of Object.entries(value)) out[key] = toLosslessJson(entry)
+    return out
+  }
+  return value
 }
 
 /** Shared `force` property. */
@@ -171,7 +212,9 @@ export function defineFamilyTool(spec) {
         cwd: typeof context?.cwd === 'string' && context.cwd !== '' ? context.cwd : process.cwd(),
         ...context,
       }
-      return handler(args ?? {}, safeContext)
+      // Every result crosses a JSON boundary, and the boundary is not lossless on its own; see
+      // {@link toLosslessJson}.
+      return toLosslessJson(await handler(args ?? {}, safeContext))
     },
   }
 }

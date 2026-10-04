@@ -270,7 +270,7 @@ export async function listCaptureDevices(config = {}) {
       maxBuffer: 8 << 20,
     }).catch((error) => ({ stdout: error?.stdout ?? '', stderr: error?.stderr ?? String(error?.message ?? '') }))
     const text = `${stdout}${stderr}`
-    return { available: true, ...parseDshowDevices(text), error: null, note: '这些名字可以直接传给 ffmpeg_record {action:"audio", device:"…"}。' }
+    return { available: true, ...parseDshowDevices(text), error: null, note: '这些名字可以直接传给 ffmpeg_record {action:"microphone", device:"…"}。' }
   } catch (error) {
     return { available: false, video: [], audio: [], error: error instanceof Error ? error.message : String(error), note: '没能列出 DirectShow 设备。' }
   }

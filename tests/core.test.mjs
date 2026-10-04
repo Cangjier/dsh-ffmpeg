@@ -42,6 +42,7 @@ import { canRemuxToMp4, describeSegmentKind, normalizeOptions, summarizeKinds, w
 import { escapeOptionValue, screenPlan, audioPlan as recordAudioPlan } from '../src/core/record.mjs'
 import { normalizeConfig } from '../index.mjs'
 import { parseProgress } from '../src/core/ffmpeg.mjs'
+import { toLosslessJson } from '../src/tools/shared.mjs'
 
 const WORK = join(import.meta.dirname, '..', 'tmp', 'unit')
 mkdirSync(WORK, { recursive: true })
@@ -766,6 +767,33 @@ test('writeChapters writes ffmetadata that ffmpeg can read', () => {
 // ---------------------------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------------------------
+
+test('toLosslessJson makes a result survive the JSON boundary', () => {
+  const input = {
+    present: 1,
+    missing: undefined,
+    notANumber: Number.NaN,
+    infinite: Number.POSITIVE_INFINITY,
+    negativeZero: -0,
+    nested: { list: [1, undefined, Number.NaN], deep: { gone: undefined } },
+    date: new Date('2026-01-02T03:04:05Z'),
+    keep: 'text',
+  }
+  const safe = toLosslessJson(input)
+  assert.deepEqual(JSON.parse(JSON.stringify(safe)), safe, '往返必须一模一样')
+  assert.equal(safe.missing, null)
+  assert.equal(safe.notANumber, null)
+  assert.equal(safe.infinite, null)
+  assert.equal(Object.is(safe.negativeZero, 0), true)
+  assert.deepEqual(safe.nested.list, [1, null, null])
+  assert.equal(safe.nested.deep.gone, null)
+  assert.equal(safe.date, '2026-01-02T03:04:05.000Z')
+
+  // A non-plain object is deliberately passed through rather than rewritten, so a handler that
+  // returns one fails loudly instead of having its shape quietly changed.
+  const bytes = new Uint8Array([1, 2, 3])
+  assert.equal(toLosslessJson(bytes), bytes)
+})
 
 test('normalizeConfig fills every default and rejects impossible values', () => {
   const config = normalizeConfig()
