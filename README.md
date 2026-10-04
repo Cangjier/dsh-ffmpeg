@@ -14,7 +14,7 @@ dsh-ffmpeg/
 │   ├── core/              确定性内核：不 import 任何 DSH 代码，可离线测试
 │   ├── tools/             模型可见的八个 ffmpeg_* 工具（文档单一来源：registry.mjs）
 │   └── bin/winrt-ocr.ps1  Windows 自带识别的封装（零安装的回退）
-├── tests/                 82 个测试：46 个纯函数 + 13 个工具面 + 23 个真 ffmpeg 端到端
+├── tests/                 85 个测试：47 个纯函数 + 13 个工具面 + 25 个真 ffmpeg 端到端
 ├── scripts/               手跑脚本：挂载检查、合成素材分析、真录屏分析
 └── docs/插件设计规格.md    设计与边界（为什么这样切、什么不做）
 ```
@@ -201,7 +201,7 @@ ffmpeg_setup { action:"install", source:"btbn-latest" } // 跟最新，只能记
 ## 开发
 
 ```sh
-node --test                          # 全部 82 个测试（没有 ffmpeg 时自动跳过 23 个端到端）
+node --test                          # 全部 85 个测试（没有 ffmpeg 时自动跳过 25 个端到端）
 node --test tests/core.test.mjs      # 只跑纯函数
 node scripts/mount-check.mjs         # 挂载检查：注册了哪些工具、用的是哪份 ffmpeg
 node scripts/analyze-demo.mjs        # 拿合成素材跑一遍 analyze，打印结构
