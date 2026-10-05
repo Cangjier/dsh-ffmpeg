@@ -1,4 +1,4 @@
-﻿# dsh-ffmpeg
+# dsh-ffmpeg
 
 把 ffmpeg 变成一套**确定的、可验证的**工具：编码、裁剪、抽帧、拼合、录屏，以及
 **「一次录屏进，视频 + 语义结构出」**。
@@ -129,9 +129,10 @@ ffmpeg 本身按这个顺序查找，**任何一处有就能用**：
 
 1. 配置里的 `ffmpegPath` / `ffprobePath`
 2. 环境变量 `DSH_FFMPEG` / `DSH_FFPROBE`
-3. 本插件 `vendor/ffmpeg/bin/`（`ffmpeg_setup {action:"install"}` 会装到这里）
-4. 同级插件的 `vendor/ffmpeg/bin`（`video-factory`、`dsh-video-audio`、`dsh-ocr`）
-5. `PATH`
+3. **共享目录 `~/.dsh-plugins/ffmpeg/bin/`**（`ffmpeg_setup {action:"install"}` 会装到这里；六个插件共用这一份）
+4. 本插件自己的 `vendor/ffmpeg/bin/`（共享目录出现之前的老位置，仍然认）
+5. 同级插件的 `vendor/ffmpeg/bin`（`video-factory`、`dsh-video-audio`、`dsh-ocr`）
+6. `PATH`
 
 什么都没有也能开机：所有工具照常注册，只是每个动作会明确告诉你缺什么、怎么补。
 
@@ -140,6 +141,11 @@ ffmpeg_setup { action:"install" }                       // gyan 9.0.2 essentials
 ffmpeg_setup { action:"install", archive:"D:/dl/ffmpeg.zip" }   // 用本地压缩包，摘要仍然校验
 ffmpeg_setup { action:"install", source:"btbn-latest" } // 跟最新，只能记录摘要
 ```
+
+**共享目录**（`~/.dsh-plugins`）是这六个插件放静态依赖的地方：ffmpeg、YAMNet 与 U²-Net 模型、
+ONNX WASM 运行时、离线 OCR 引擎。它按**用户主目录**推导，所以同一台机器上两个用户各有一份；
+`DSH_PLUGIN_HOME` 可以把整个根换到别处（比如 D 盘）。`ffmpeg_setup {action:"remove"}` 删的是
+共享的那份——删完全家六个插件都会找不到 ffmpeg，直到重新 install。
 
 ## 配置
 

@@ -24,7 +24,7 @@ export const TOOL_ORDER = [
 
 /** Shared prose reused by several entries. */
 const CWD = 'cwd: 相对路径的基准目录，默认取进程工作目录。'
-const FFMPEG_NEEDED = 'ffmpeg（本插件 vendor/ffmpeg/bin、DSH_FFMPEG、同级插件或 PATH 都能提供）。'
+const FFMPEG_NEEDED = 'ffmpeg（共享目录 ~/.dsh-plugins/ffmpeg/bin、DSH_FFMPEG、插件自己的 vendor/ffmpeg/bin、同级插件或 PATH 都能提供）。'
 
 export const TOOL_REGISTRY = {
   ffmpeg_env: {
@@ -34,13 +34,13 @@ export const TOOL_REGISTRY = {
     next: ['ffmpeg_setup {action:"install"} 装一份固定的构建', 'ffmpeg_probe {action:"info"} 看素材'],
     actions: {
       probe: {
-        summary: '报出 ffmpeg / ffprobe 各自的实际路径、来源（配置 / 环境变量 / vendor / 同级插件 / PATH）、版本，以及 vendor 里那份构建的来源记录。',
+        summary: '报出 ffmpeg / ffprobe 各自的实际路径、来源（配置 / 环境变量 / 共享目录 / 本插件 vendor / 同级插件 / PATH）、版本，以及那份构建的来源记录。',
         required: [],
         use: '第一次用它、换机器、或者怀疑「到底在用哪一份 ffmpeg」。',
         avoid: '不会启动任何编码，也不会写文件；它是一次文件系统 + 两次 -version 调用。',
-        returns: '{ffmpeg:{path,source,label,version}, ffprobe:{…}, vendor:{present,directory,files,sizeBytes,source}, install:{sources,defaultSource}, concurrency, timeoutMs}',
+        returns: '{ffmpeg:{path,source,label,version}, ffprobe:{…}, vendor:{present,directory,location,files,sizeBytes,source,shared}, install:{sources,defaultSource}, concurrency, timeoutMs}',
         cost: '约 100 ms。',
-        pitfalls: 'source 是 "path" 时说明用的是系统里那份，版本可能和 vendor 的不同——要可复现请 install。',
+        pitfalls: 'source 是 "path" 时说明用的是系统里那份，版本可能和共享目录的不同——要可复现请 install。',
         example: 'ffmpeg_env {action:"probe"}',
       },
       caps: {
@@ -67,30 +67,30 @@ export const TOOL_REGISTRY = {
   },
 
   ffmpeg_setup: {
-    purpose: '把一份固定的 ffmpeg 装进本插件的 vendor/ffmpeg/bin，或者看它现在是什么、把它删掉。',
+    purpose: '把一份固定的 ffmpeg 装进共享目录 ~/.dsh-plugins/ffmpeg/bin（六个插件共用一份），或者看它现在是什么、把它删掉。',
     needs: ['install 需要网络（或一个本地压缩包）；status / remove 不需要。'],
     next: ['ffmpeg_env {action:"probe"} 确认装到了', 'ffmpeg_convert 开始干活'],
     actions: {
       status: {
-        summary: '报告 vendor 里那份构建是否存在、有哪些可执行文件、多大、装自哪个来源、摘要是否校验过，以及现在实际会用哪一个 ffmpeg。',
+        summary: '报告那份构建是否存在、有哪些可执行文件、多大、装自哪个来源、摘要是否校验过，以及现在实际会用哪一个 ffmpeg。',
         required: [],
-        returns: '{vendor:{present,directory,files,sizeBytes,source}, resolved:{ffmpeg,ffprobe}, sources:[…], defaultSource, wanted, note}',
+        returns: '{vendor:{present,directory,binDir,location,files,sizeBytes,source,shared}, resolved:{ffmpeg,ffprobe}, sources:[…], defaultSource, wanted, note}；location 说明读的是共享目录还是旧的 vendor/ffmpeg。',
         cost: '文件系统调用，无网络。',
         use: '装之前、装之后、以及「为什么还在用系统那份」。',
         example: 'ffmpeg_setup {action:"status"}',
       },
       install: {
-        summary: '下载一份构建并把 ffmpeg.exe / ffprobe.exe / ffplay.exe 解压进 vendor/ffmpeg/bin；默认来源是版本固定的 gyan 9.0.2，SHA-256 强制校验。',
+        summary: '下载一份构建并把 ffmpeg.exe / ffprobe.exe / ffplay.exe 解压进共享目录 ~/.dsh-plugins/ffmpeg/bin；默认来源是版本固定的 gyan 9.0.2，SHA-256 强制校验。',
         required: [],
-        use: '换机器、要可复现、或机器上根本没有 ffmpeg。',
-        avoid: 'vendor 里已有可执行文件时不会重复下载（要覆盖必须 force:true）。',
+        use: '换机器、要可复现、或机器上根本没有 ffmpeg。装一次，dsh-ffmpeg / dsh-ocr / dsh-tts / dsh-video-audio / video-factory 都能用它。',
+        avoid: '共享目录里已有可执行文件时不会重复下载（要覆盖必须 force:true）。',
         returns: '{installed, source, label, version, url, bytes, sha256, pinnedSha256, verified, files, installedAt, vendor}',
         cost: '约 110 MB 下载 + 解压，几分钟；可用 archive 指定已下好的 zip。',
         pitfalls: 'source:"btbn-latest" 指向 latest，字节会变，只能记录摘要而不能校验；摘要不符时默认拒绝安装。',
         example: 'ffmpeg_setup {action:"install"}　或　ffmpeg_setup {action:"install", archive:"D:/dl/ffmpeg.zip"}',
       },
       remove: {
-        summary: '删掉 vendor/ffmpeg 整棵树，释放约 200–400 MB；不会碰同级插件或 PATH 上的 ffmpeg。',
+        summary: '删掉共享的 ffmpeg 整棵树，释放约 200–400 MB；不会碰插件自己的 vendor/ 或 PATH 上的 ffmpeg。删掉之后全家六个插件都会找不到它，直到重新 install。',
         required: [],
         returns: '{removed, directory}',
         cost: '一次递归删除。',

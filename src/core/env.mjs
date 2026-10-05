@@ -6,11 +6,13 @@
  * **source** that produced it. "ffmpeg works here" is otherwise a fact nobody can check, and a
  * machine with two builds silently reports whichever one happened to be reached first.
  *
- * The order is: an explicit configured path, then the environment override, then this plugin's
- * own vendored build, then a sibling plugin's vendored build, then PATH. A vendored build beats
- * PATH because it is the one thing that makes a render reproducible across machines; a sibling's
- * build beats PATH because it is already on disk and is the same generation this ecosystem was
- * measured against.
+ * The order is: an explicit configured path, then the environment override, then **the shared
+ * plugin home** (`~/.dsh-plugins/ffmpeg/bin`, where this plugin installs), then this plugin's own
+ * `vendor/ffmpeg/bin`, then a sibling plugin's vendored build, then PATH. The shared home comes
+ * first because it is one place for all six plugins and survives a checkout being moved; the
+ * `vendor/` directories stay as candidates for a machine that installed a build before the shared
+ * home existed. Any found build beats PATH because it is what makes a render reproducible across
+ * machines.
  *
  * Nothing here runs a process except {@link versionOf}, which is called deliberately and cached.
  *
@@ -18,14 +20,13 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { execFile } from 'node:child_process'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { PLUGIN_ROOT, SHARED_FFMPEG_BIN, SHARED_FFMPEG_DIR, binaryName, sharedHomeState } from './home.mjs'
 
 const run = promisify(execFile)
 
-/** Plugin package root, resolved from this module so a `link:` install still works. */
-export const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+export { PLUGIN_ROOT, sharedHomeState }
 
 /** Environment variable that names an ffmpeg executable outright. */
 export const FFMPEG_ENV = 'DSH_FFMPEG'
@@ -33,11 +34,14 @@ export const FFMPEG_ENV = 'DSH_FFMPEG'
 /** Environment variable that names an ffprobe executable outright. */
 export const FFPROBE_ENV = 'DSH_FFPROBE'
 
-/** This plugin's private build directory. */
+/** This plugin's own legacy build directory, still honoured when the shared home is empty. */
 export const VENDOR_DIR = join(PLUGIN_ROOT, 'vendor', 'ffmpeg')
 
-/** Where the binaries of the private build live, and the first place discovery looks after config. */
+/** Where the binaries of the legacy build live. */
 export const VENDOR_BIN_DIR = join(VENDOR_DIR, 'bin')
+
+/** Where this plugin installs, and the first directory discovery looks in after config. */
+export const SHARED_BIN_DIR = SHARED_FFMPEG_BIN
 
 /** Sibling checkouts whose vendored ffmpeg is acceptable, nearest first. */
 export const SIBLING_PLUGINS = ['video-factory', 'dsh-video-audio', 'dsh-ocr', 'dsh-ffmpeg']
@@ -56,14 +60,7 @@ export class FfmpegNotFound extends Error {
 /** Cache of resolved binaries, so discovery runs once per process. */
 const resolved = new Map()
 
-/**
- * The executable name for one ffmpeg-family tool on this platform.
- * @param {'ffmpeg'|'ffprobe'|'ffplay'} stem - which binary.
- * @returns {string} the file name.
- */
-export function binaryName(stem) {
-  return process.platform === 'win32' ? `${stem}.exe` : stem
-}
+export { binaryName }
 
 /**
  * Resolve the working directory for one request.
@@ -101,7 +98,7 @@ export function siblingRoots() {
  *
  * @param {'ffmpeg'|'ffprobe'|'ffplay'} stem - which binary.
  * @param {object} [config] - normalized plugin config.
- * @returns {{path: string, source: 'config'|'env'|'vendor'|'sibling'|'path', label: string}[]} candidates that exist, best first.
+ * @returns {{path: string, source: 'config'|'env'|'home'|'vendor'|'sibling'|'path', label: string}[]} candidates that exist, best first.
  */
 export function binaryCandidates(stem, config = {}) {
   const name = binaryName(stem)
@@ -119,6 +116,8 @@ export function binaryCandidates(stem, config = {}) {
 
   const fromEnv = process.env[stem === 'ffmpeg' ? FFMPEG_ENV : FFPROBE_ENV]
   push(fromEnv ?? '', 'env', `环境变量 ${stem === 'ffmpeg' ? FFMPEG_ENV : FFPROBE_ENV}`)
+
+  push(join(SHARED_BIN_DIR, name), 'home', `共享目录 ${SHARED_FFMPEG_DIR}`)
 
   push(join(VENDOR_BIN_DIR, name), 'vendor', '本插件 vendor/ffmpeg/bin')
 
@@ -174,8 +173,8 @@ export function requireTool(stem, config = {}) {
   throw new FfmpegNotFound(
     `找不到 ${binaryName(stem)}，本插件无法执行这一步。\n` +
       `按顺序找过：配置里的 ${stem === 'ffmpeg' ? 'ffmpegPath' : 'ffprobePath'} → ${stem === 'ffmpeg' ? FFMPEG_ENV : FFPROBE_ENV} 环境变量 → ` +
-      `${VENDOR_BIN_DIR} → 同级插件的 vendor/ffmpeg/bin → PATH。\n` +
-      `最省事的修法：ffmpeg_setup {action:"install"}，把一份固定的构建装进本插件的 vendor/ffmpeg/bin。`,
+      `共享目录 ${SHARED_BIN_DIR} → 本插件 ${VENDOR_BIN_DIR} → 同级插件的 vendor/ffmpeg/bin → PATH。\n` +
+      `最省事的修法：ffmpeg_setup {action:"install"}，把一份固定的构建装进共享目录 ${SHARED_FFMPEG_DIR}（六个插件共用一份）。`,
   )
 }
 
@@ -201,37 +200,60 @@ export async function versionOf(binary) {
 }
 
 /**
- * What the private build currently looks like, without running anything.
+ * Which directory this plugin's build is read from and installed into.
  *
- * @returns {{present: boolean, directory: string, files: {name: string, bytes: number}[], sizeBytes: number, source: object|null}} the state.
+ * The shared home when it holds a build, otherwise the legacy `vendor/ffmpeg` when that one does,
+ * otherwise the shared home — the place an install is about to create. A machine that installed
+ * before the shared home existed therefore keeps reporting a place that exists, rather than an
+ * empty directory it is not using.
+ *
+ * @returns {{directory: string, binDir: string, source: 'home'|'vendor'}} the resolved install location.
+ */
+export function installLocation() {
+  if (existsSync(join(SHARED_BIN_DIR, binaryName('ffmpeg'))) || existsSync(join(SHARED_BIN_DIR, binaryName('ffprobe')))) {
+    return { directory: SHARED_FFMPEG_DIR, binDir: SHARED_BIN_DIR, source: 'home' }
+  }
+  if (existsSync(join(VENDOR_BIN_DIR, binaryName('ffmpeg'))) || existsSync(join(VENDOR_BIN_DIR, binaryName('ffprobe')))) {
+    return { directory: VENDOR_DIR, binDir: VENDOR_BIN_DIR, source: 'vendor' }
+  }
+  return { directory: SHARED_FFMPEG_DIR, binDir: SHARED_BIN_DIR, source: 'home' }
+}
+
+/**
+ * What the installed build currently looks like, without running anything.
+ *
+ * @returns {{present: boolean, directory: string, binDir: string, location: 'home'|'vendor', files: {name: string, bytes: number}[], sizeBytes: number, source: object|null, shared: object}} the state.
  */
 export function vendoredState() {
-  if (!existsSync(VENDOR_BIN_DIR)) return { present: false, directory: VENDOR_BIN_DIR, files: [], sizeBytes: 0, source: null }
-
-  const files = []
-  let sizeBytes = 0
-  for (const name of readdirSync(VENDOR_BIN_DIR)) {
-    try {
-      const stats = statSync(join(VENDOR_BIN_DIR, name))
-      files.push({ name, bytes: stats.size })
-      sizeBytes += stats.size
-    } catch {
-      // A file that vanished mid-listing simply does not count.
-    }
-  }
-
-  const recordPath = join(VENDOR_DIR, 'SOURCE.json')
+  const location = installLocation()
+  const shared = sharedHomeState()
+  const manifestPath = join(location.directory, 'SOURCE.json')
   let source = null
-  if (existsSync(recordPath)) {
+  if (existsSync(manifestPath)) {
     try {
-      source = JSON.parse(readFileSync(recordPath, 'utf8'))
+      source = JSON.parse(readFileSync(manifestPath, 'utf8'))
     } catch {
       // A record that cannot be parsed is reported as absent rather than taking the status call
       // down with it: the binaries are the fact that matters.
       source = null
     }
   }
-  return { present: files.length > 0, directory: VENDOR_BIN_DIR, files, sizeBytes, source }
+
+  const base = { directory: location.directory, binDir: location.binDir, location: location.source, source, shared }
+  if (!existsSync(location.binDir)) return { present: false, ...base, files: [], sizeBytes: 0 }
+
+  const files = []
+  let sizeBytes = 0
+  for (const name of readdirSync(location.binDir)) {
+    try {
+      const stats = statSync(join(location.binDir, name))
+      files.push({ name, bytes: stats.size })
+      sizeBytes += stats.size
+    } catch {
+      // A file that vanished mid-listing simply does not count.
+    }
+  }
+  return { present: files.length > 0, ...base, files, sizeBytes }
 }
 
 /**

@@ -3,7 +3,7 @@
  *
  * @module dsh-ffmpeg/tools/guide
  */
-import { PLUGIN_ROOT, VENDOR_BIN_DIR, FFMPEG_ENV, resolveTool, siblingRoots } from '../core/env.mjs'
+import { PLUGIN_ROOT, SHARED_BIN_DIR, VENDOR_BIN_DIR, FFMPEG_ENV, resolveTool, sharedHomeState, siblingRoots } from '../core/env.mjs'
 import { ANALYSIS_DEFAULTS, SEGMENT_KINDS, SEGMENT_KIND_RULES } from '../core/semantics.mjs'
 import { LABEL_MEANINGS, REGION_LABELS } from '../core/segmentation.mjs'
 import { DEFAULT_MAX_SEGMENT, DEFAULT_MIN_SEGMENT, DEFAULT_SCENE_THRESHOLD, SEGMENT_REASONS } from '../core/timeline.mjs'
@@ -75,13 +75,13 @@ export const PLAYBOOKS = {
   },
   'bootstrap-machine': {
     title: '把这台机器装好',
-    when: '新机器、或 vendor 是空的。',
+    when: '新机器、或共享目录与 vendor 都是空的。',
     steps: [
       { tool: 'ffmpeg_setup', call: 'ffmpeg_setup {action:"status"}', why: '看现在有没有、会先用哪一个。' },
-      { tool: 'ffmpeg_setup', call: 'ffmpeg_setup {action:"install"}', why: '下载版本固定、SHA-256 强制校验的那份，装进 vendor/ffmpeg/bin。' },
+      { tool: 'ffmpeg_setup', call: 'ffmpeg_setup {action:"install"}', why: '下载版本固定、SHA-256 强制校验的那份，装进共享目录 ~/.dsh-plugins/ffmpeg/bin——六个插件共用这一份。' },
       { tool: 'ffmpeg_env', call: 'ffmpeg_env {action:"caps"}', why: '确认 gdigrab / dshow / libx264 / subtitles 都在。' },
     ],
-    mistakes: ['vendor 已有构建时 install 不会重复下载；要换构建用 force:true。'],
+    mistakes: ['共享目录里已有构建时 install 不会重复下载；要换构建用 force:true。'],
   },
 }
 
@@ -119,8 +119,10 @@ export function createGuideTool(config, logger) {
           playbooks: Object.entries(PLAYBOOKS).map(([job, entry]) => ({ job, title: entry.title, when: entry.when })),
           where: {
             pluginRoot: PLUGIN_ROOT,
-            vendorBin: VENDOR_BIN_DIR,
+            sharedBin: SHARED_BIN_DIR,
+            legacyVendorBin: VENDOR_BIN_DIR,
             envOverride: FFMPEG_ENV,
+            sharedHome: sharedHomeState(),
             siblingRoots: siblingRoots(),
             currentFfmpeg: resolveTool('ffmpeg', config),
           },

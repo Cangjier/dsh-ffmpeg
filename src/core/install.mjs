@@ -20,7 +20,8 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { VENDOR_BIN_DIR, VENDOR_DIR, resetToolCache, resolveTool, vendoredState } from './env.mjs'
+import { SHARED_FFMPEG_BIN, SHARED_FFMPEG_DIR } from './home.mjs'
+import { resetToolCache, resolveTool, vendoredState } from './env.mjs'
 import { InstallError, downloadFile, sha256File } from './net.mjs'
 
 /** The executables taken out of an archive. */
@@ -164,7 +165,7 @@ export async function installFfmpeg(options = {}) {
   if (state.present && options.force !== true) {
     return {
       installed: false,
-      reason: 'vendor/ffmpeg/bin 里已经有可执行文件，没有重新下载；要覆盖请传 force:true。',
+      reason: `${state.directory} 里已经有可执行文件，没有重新下载；要覆盖请传 force:true。`,
       vendor: state,
       digest: { verified: state.source?.verified ?? null, sha256: state.source?.sha256 ?? null },
     }
@@ -176,8 +177,12 @@ export async function installFfmpeg(options = {}) {
     throw new InstallError(`未知的 source ${JSON.stringify(sourceId)}；可选：${Object.keys(FFMPEG_SOURCES).join(', ')}。`)
   }
 
-  mkdirSync(VENDOR_DIR, { recursive: true })
-  const scratch = join(VENDOR_DIR, 'download.zip')
+  // One shared build for the whole family: this is the only place a copy is written, and a
+  // sibling plugin reading the same directory is the point rather than a collision.
+  const targetDir = SHARED_FFMPEG_DIR
+  const targetBinDir = SHARED_FFMPEG_BIN
+  mkdirSync(targetDir, { recursive: true })
+  const scratch = join(targetDir, 'download.zip')
   let archivePath = scratch
   let bytes = null
   let digest = null
@@ -227,8 +232,8 @@ export async function installFfmpeg(options = {}) {
     options.onProgress?.(`该来源不提供固定摘要，仅记录：${digest}`)
   }
 
-  rmSync(VENDOR_BIN_DIR, { recursive: true, force: true })
-  const files = await extractBinaries(archivePath, VENDOR_BIN_DIR, { onProgress: options.onProgress })
+  rmSync(targetBinDir, { recursive: true, force: true })
+  const files = await extractBinaries(archivePath, targetBinDir, { onProgress: options.onProgress })
   if (archivePath === scratch) rmSync(scratch, { force: true })
 
   const record = {
@@ -243,22 +248,29 @@ export async function installFfmpeg(options = {}) {
     files,
     installedAt: new Date().toISOString(),
     notes: source.notes,
+    ownedBy: 'dsh-ffmpeg',
+    sharedWith: ['dsh-video-audio', 'video-factory', 'dsh-ocr', 'dsh-tts', 'dsh-computer-use'],
   }
-  writeFileSync(join(VENDOR_DIR, 'SOURCE.json'), `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8' })
+  writeFileSync(join(targetDir, 'SOURCE.json'), `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8' })
   resetToolCache()
 
   return { installed: true, ...record, vendor: vendoredState() }
 }
 
 /**
- * Delete this plugin's private build.
+ * Delete this plugin's private build from the shared home.
+ *
+ * The whole shared `ffmpeg/` tree goes, because it belongs to this plugin: the other five read it
+ * and none of them install it. Removing the shared build therefore breaks all six until one of
+ * them reinstalls it, which is what the caller is asking for.
+ *
  * @returns {{removed: boolean, directory: string}} whether anything was there.
  */
 export function removeFfmpeg() {
-  const existed = existsSync(VENDOR_DIR)
-  if (existed) rmSync(VENDOR_DIR, { recursive: true, force: true })
+  const existed = existsSync(SHARED_FFMPEG_DIR)
+  if (existed) rmSync(SHARED_FFMPEG_DIR, { recursive: true, force: true })
   resetToolCache()
-  return { removed: existed, directory: VENDOR_DIR }
+  return { removed: existed, directory: SHARED_FFMPEG_DIR }
 }
 
 /**
@@ -271,6 +283,7 @@ export function installState(options = {}) {
   const state = vendoredState()
   return {
     vendor: state,
+    shared: state.shared,
     resolved: {
       ffmpeg: resolveTool('ffmpeg', options),
       ffprobe: resolveTool('ffprobe', options),
